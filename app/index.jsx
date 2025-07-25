@@ -1,67 +1,127 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  Switch,
+  TouchableOpacity,
   ActivityIndicator,
-  Pressable
-} from 'react-native'
-import MapView, { Marker, Polyline } from 'react-native-maps'
-import * as Location from 'expo-location'
-import { Ionicons } from '@expo/vector-icons'
+  Alert,
+  Switch
+} from 'react-native';
+import MapView, { Marker, Polyline } from 'react-native-maps';
+import * as Location from 'expo-location';
+import { Ionicons } from '@expo/vector-icons';
 
-export default function DriverMain() {
-  const [location, setLocation] = useState(null)
-  const [region, setRegion] = useState(null)
-  const [isOnline, setIsOnline] = useState(true)
-  const [destination, setDestination] = useState(null)
-  const [routeCoords, setRouteCoords] = useState([])
+export default function DriverApp() {
+  const [location, setLocation] = useState(null);
+  const [region, setRegion] = useState(null);
+  const [outboundRoute, setOutboundRoute] = useState([]);
+  const [returnRoute, setReturnRoute] = useState([]);
+  const [isOnline, setIsOnline] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [distance, setDistance] = useState(null);
+  const [duration, setDuration] = useState(null);
 
-  // Simulated passenger location
-  const passengers = [
-    { id: 1, latitude: 37.785, longitude: -122.42, name: 'Passenger A' },
-    { id: 2, latitude: 37.787, longitude: -122.41, name: 'Passenger B' }
-  ]
+  const STATIONS = {
+    mexico: { 
+      latitude: 9.011410, 
+      longitude: 38.745901,
+      name: "Mexico Taxi Station",
+      address: "Ras Abebe Aragay St, Addis Ababa"
+    },
+    kazanchis: { 
+      latitude: 9.014795, 
+      longitude: 38.771305,
+      name: "Kazanchis Taxi Station",
+      address: "Tito St, Addis Ababa"
+    }
+  };
+
+  const WAYPOINTS = {
+    outbound: [
+      {latitude: 9.017159, longitude: 38.752188}, 
+      {latitude: 9.018573, longitude: 38.760305}, 
+      {latitude: 9.017232, longitude: 38.763363}, 
+      {latitude: 9.016003, longitude: 38.770468}  
+    ]
+  };
 
   useEffect(() => {
     (async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync()
+      let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        alert('Permission to access location was denied')
-        return
+        Alert.alert('Permission needed', 'Location permission is required');
+        return;
       }
 
-      const loc = await Location.getCurrentPositionAsync({})
-      const coords = {
-        latitude: loc.coords.latitude,
-        longitude: loc.coords.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01
+      const loc = await Location.getCurrentPositionAsync({});
+      setLocation(loc.coords);
+      
+      setRegion({
+        latitude: (STATIONS.mexico.latitude + STATIONS.kazanchis.latitude) / 2,
+        longitude: (STATIONS.mexico.longitude + STATIONS.kazanchis.longitude) / 2,
+        latitudeDelta: 0.04,
+        longitudeDelta: 0.04
+      });
+
+      await fetchRouteCoordinates();
+      setLoading(false);
+    })();
+  }, []);
+
+  const fetchRouteCoordinates = async () => {
+    try {
+      const coordinates = [
+        `${STATIONS.mexico.longitude},${STATIONS.mexico.latitude}`,
+        ...WAYPOINTS.outbound.map(wp => `${wp.longitude},${wp.latitude}`),
+        `${STATIONS.kazanchis.longitude},${STATIONS.kazanchis.latitude}`
+      ].join(';');
+
+      const response = await fetch(
+        `https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson`
+      );
+      const data = await response.json();
+
+      if (data.routes && data.routes[0]) {
+        const coords = data.routes[0].geometry.coordinates.map(coord => ({
+          latitude: coord[1],
+          longitude: coord[0]
+        }));
+        setOutboundRoute(coords);
+        setDistance((data.routes[0].distance / 1000).toFixed(1));
+        setDuration((data.routes[0].duration / 60).toFixed(0));
+        
+        setReturnRoute([...coords].reverse());
       }
+    } catch (error) {
+      console.error('Error fetching route:', error);
+      Alert.alert('Error', 'Could not fetch route data');
+      setOutboundRoute([
+        STATIONS.mexico,
+        ...WAYPOINTS.outbound,
+        STATIONS.kazanchis
+      ]);
+      setReturnRoute([
+        STATIONS.kazanchis,
+        ...[...WAYPOINTS.outbound].reverse(),
+        STATIONS.mexico
+      ]);
+      setDistance(3.5);
+      setDuration(12);
+    }
+  };
 
-      setLocation(loc.coords)
-      setRegion(coords)
-    })()
-  }, [])
+  const toggleOnlineStatus = () => {
+    setIsOnline(previousState => !previousState);
+  };
 
-  const handleMapLongPress = (event) => {
-    const { coordinate } = event.nativeEvent
-    setDestination(coordinate)
-
-    // Fake a route (in real app use Google Directions API or Mapbox)
-    setRouteCoords([
-      { latitude: location.latitude, longitude: location.longitude },
-      coordinate
-    ])
-  }
-
-  if (!region) {
+  if (loading) {
     return (
       <View style={styles.loading}>
         <ActivityIndicator size="large" />
+        <Text style={styles.loadingText}>Loading road-aligned route...</Text>
       </View>
-    )
+    );
   }
 
   return (
@@ -70,46 +130,74 @@ export default function DriverMain() {
         style={styles.map}
         region={region}
         showsUserLocation={true}
-        onLongPress={handleMapLongPress}
+        showsTraffic={true}
+        showsCompass={true}
       >
-        {/* Destination Marker */}
-        {destination && (
-          <Marker coordinate={destination} pinColor="green" title="Destination" />
+        <Marker
+          coordinate={STATIONS.mexico}
+          title="Mexico Taxi Station"
+          description={STATIONS.mexico.address}
+          pinColor="green"
+        />
+        <Marker
+          coordinate={STATIONS.kazanchis}
+          title="Kazanchis Taxi Station"
+          description={STATIONS.kazanchis.address}
+          pinColor="red"
+        />
+
+        {outboundRoute.length > 1 && (
+          <Polyline
+            coordinates={outboundRoute}
+            strokeColor="#0a84ff"
+            strokeWidth={5}
+          />
         )}
 
-        {/* Passenger Markers */}
-        {passengers.map((p) => (
+        {returnRoute.length > 1 && (
+          <Polyline
+            coordinates={returnRoute}
+            strokeColor="#ff9900"
+            strokeWidth={5}
+            lineDashPattern={[5, 5]}
+          />
+        )}
+
+        {WAYPOINTS.outbound.map((point, index) => (
           <Marker
-            key={p.id}
-            coordinate={{ latitude: p.latitude, longitude: p.longitude }}
-            title={p.name}
+            key={index}
+            coordinate={point}
+            title={index === 0 ? "Ras Abebe Aragay St" : 
+                  index === 1 || index === 2 ? "Yohanis St" : "Tito St"}
             pinColor="blue"
           />
         ))}
-
-        {/* Route Line */}
-        {routeCoords.length >= 2 && (
-          <Polyline
-            coordinates={routeCoords}
-            strokeColor="#000"
-            strokeWidth={4}
-          />
-        )}
       </MapView>
 
-      {/* Online/Offline Toggle */}
-      <View style={styles.statusBar}>
-        <Text style={styles.statusText}>Status: {isOnline ? 'Online' : 'Offline'}</Text>
-        <Switch value={isOnline} onValueChange={setIsOnline} />
+      <View style={[styles.statusBar, { backgroundColor: isOnline ? '#0a84ff' : '#e0e0e0' }]}>
+        <View style={styles.statusToggle}>
+          <Text style={[styles.statusText, { color: isOnline ? 'white' : 'black' }]}>
+            {isOnline ? ' ONLINE ' : ' OFFLINE '}
+          </Text>
+          <Switch
+            value={isOnline}
+            onValueChange={toggleOnlineStatus}
+            trackColor={{ false: '#767577', true: 'white' }}
+            thumbColor={isOnline ? '#0a84ff' : '#f4f3f4'}
+          />
+        </View>
+        
+        <View style={styles.routeInfo}>
+          <Text style={[styles.routeText, { color: isOnline ? 'white' : 'black' }]}>
+            Route: Ras Abebe Aragay → Yohanis → Tito
+          </Text>
+          <Text style={[styles.routeText, { color: isOnline ? 'white' : 'black' }]}>
+            Distance: {distance} km • Time: {duration} mins
+          </Text>
+        </View>
       </View>
-
-      {/* Trip Info Button */}
-      <Pressable style={styles.tripButton}>
-        <Ionicons name="car-outline" size={24} color="white" />
-        <Text style={styles.tripText}>View Trip</Text>
-      </Pressable>
     </View>
-  )
+  );
 }
 
 const styles = StyleSheet.create({
@@ -124,34 +212,41 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center'
   },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16
+  },
   statusBar: {
     position: 'absolute',
-    top: 50,
-    left: 20,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#0a84ff',
     padding: 10,
     borderRadius: 10,
-    flexDirection: 'row',
-    alignItems: 'center'
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5
   },
-  statusText: {
-    color: 'white',
-    marginRight: 10
-  },
-  tripButton: {
-    position: 'absolute',
-    bottom: 40,
-    right: 20,
+  statusToggle: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#222',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 20
+    justifyContent: 'space-between'
   },
-  tripText: {
-    color: 'white',
-    marginLeft: 8,
-    fontWeight: '600'
+  statusText: {
+    fontSize: 16,
+    fontWeight: 'bold'
+  },
+  routeInfo: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.3)'
+  },
+  routeText: {
+    fontSize: 14,
+    marginVertical: 2
   }
-})
+});
